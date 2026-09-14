@@ -291,6 +291,7 @@ class QStoreModule(InstanceLivenessTarget):
                 last_seen=now,
                 has_liveness_signal=False,
                 event_backend=event_backend,
+                ipc_events=self._ctx.ipc_events,
             )
 
         logger.info(
@@ -418,16 +419,13 @@ class QStoreModule(InstanceLivenessTarget):
                     blocks_per_chunk,
                 )
                 event_backend.record_event(event, cache_context.stream)
-                return event_backend.export_event(event, cache_context.device), False
+                return entry.export_completion_event(event), False
 
             block_ids_per_group_gpu = downsample_and_stage_block_ids(
                 cache_context, gpu_block_ids
             )
 
-            vllm_event = event_backend.import_event(
-                event_ipc_handle, cache_context.device
-            )
-            event_backend.wait_event(vllm_event, cache_context.stream)
+            entry.import_producer_event(event_ipc_handle)
 
             # CPU-synchronous sentinel: a GPU store is about to be enqueued.
             # Must be published via publish() (not publish_on_stream) so the
@@ -533,4 +531,4 @@ class QStoreModule(InstanceLivenessTarget):
                 num_chunks * self._ctx.chunk_size,
                 ed - st,
             )
-        return event_backend.export_event(event, cache_context.device), store_succeeded
+        return entry.export_completion_event(event), store_succeeded

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard
-from typing import Any, Generic, Optional, TypeVar, cast
+from typing import Any, Callable, Generic, Optional, TypeVar, cast
 import threading
 
 # First Party
@@ -21,6 +21,9 @@ class MessagingFuture(Generic[T]):
         self.result_: T | None = None
         self.exception_: BaseException | None = None
         self._retained_references: list[object] = []
+        # Set by the request client: tells the server the worker is done with
+        # the completion event whose handle this future's reply carried.
+        self.release_hook: Callable[[bytes], object] | None = None
 
     def query(self) -> bool:
         """
@@ -171,6 +174,7 @@ class DeviceMessagingFuture(MessagingFuture[T]):
         self.raw_future_ = raw_future
         self.event_: Any | None = None
         self.result_: T | None = None
+        self._event_bytes = b""
         self._raw_response_processed = False
         self.device_ = device if device is not None else torch_dev.current_device()
         if event_backend is None:
@@ -192,7 +196,14 @@ class DeviceMessagingFuture(MessagingFuture[T]):
 
         self.result_ = result
         self.event_ = event
+        self._event_bytes = event_bytes
         self._raw_response_processed = True
+
+    def _release_event(self) -> None:
+        """Drop the imported event and tell its exporter the worker is done."""
+        event, self.event_ = self.event_, None
+        if event is not None and self.raw_future_.release_hook is not None:
+            self.raw_future_.release_hook(self._event_bytes)
 
     def wait(self, timeout: Optional[float] = None) -> bool:
         """
@@ -213,6 +224,7 @@ class DeviceMessagingFuture(MessagingFuture[T]):
         if self._raw_response_processed:
             if self.event_ is not None:
                 self._event_backend.synchronize_event(self.event_, self.device_)
+                self._release_event()
             return True
 
         flag = self.raw_future_.wait(timeout)
@@ -223,6 +235,7 @@ class DeviceMessagingFuture(MessagingFuture[T]):
 
         if self.event_ is not None:
             self._event_backend.synchronize_event(self.event_, self.device_)
+            self._release_event()
 
         return True
 
@@ -258,18 +271,16 @@ class DeviceMessagingFuture(MessagingFuture[T]):
         Returns:
             bool: True if the future is done, False otherwise.
         """
-        if self._raw_response_processed:
-            if self.event_ is None:
-                return True
-            return self._event_backend.query_event(self.event_)
-
-        if self.raw_future_.query():
+        if not self._raw_response_processed:
+            if not self.raw_future_.query():
+                return False
             self._on_raw_future_complete()
-            if self.event_ is None:
-                return True
-            return self._event_backend.query_event(self.event_)
-
-        return False
+        if self.event_ is None:
+            return True
+        if not self._event_backend.query_event(self.event_):
+            return False
+        self._release_event()
+        return True
 
     def set_result(self, result: T) -> None:
         raise NotImplementedError(
