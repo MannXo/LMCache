@@ -1,0 +1,37 @@
+# coordinator-controllers <-> LMCache compatibility test.
+#
+# Runs the private coordinator-controllers repo's test suite against the PR's
+# LMCache, on the shared GPU host (no GPU is used). Steps editor in Buildkite:
+#   buildkite-agent pipeline upload .buildkite/coordinator_controllers/pipeline.yaml
+# Buildkite secrets: CC_TM_PAT (GitHub PAT, contents read) and CC_REPO
+# (owner/name). CC_REF in the pipeline env overrides the ref under test.
+
+steps:
+  - label: "Detect coordinator changes"
+    key: "cc_detect_changes"
+    command: |
+      set -eu
+
+      BASE_REF="origin/dev"
+      SCOPE="lmcache/v1/mp_coordinator/ lmcache/v1/distributed/ lmcache/v1/multiprocess/ lmcache/cli/ requirements/ pyproject.toml setup.py .buildkite/coordinator_controllers/"
+
+      if ! git fetch --quiet origin dev 2>/dev/null; then
+        echo "WARN: could not fetch $$BASE_REF; running the test defensively."
+        buildkite-agent pipeline upload .buildkite/coordinator_controllers/tests.yaml
+        exit 0
+      fi
+
+      if ! CHANGED=$(git diff --name-only "$$BASE_REF...HEAD" -- $$SCOPE 2>/dev/null); then
+        echo "WARN: git diff failed; running the test defensively."
+        buildkite-agent pipeline upload .buildkite/coordinator_controllers/tests.yaml
+        exit 0
+      fi
+
+      if [ -z "$$CHANGED" ]; then
+        echo "No coordinator-facing changes vs $$BASE_REF; skipping the coordinator-controllers test."
+        exit 0
+      fi
+
+      echo "Coordinator-facing changes detected:"
+      echo "$$CHANGED"
+      buildkite-agent pipeline upload .buildkite/coordinator_controllers/tests.yaml

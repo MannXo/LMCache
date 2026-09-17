@@ -1,0 +1,16 @@
+steps:
+  - label: "coordinator-controllers compat"
+    key: "cc_compat"
+    timeout_in_minutes: 30
+    command: |
+      echo $$PWD # for debugging
+      bash .buildkite/coordinator_controllers/run.sh
+
+  - label: "Cleanup workspace"
+    depends_on: "cc_compat"
+    allow_dependency_failure: true
+    command: |
+      export TARGET="$$PWD"
+      echo "Deleting current workspace $$TARGET"
+      cd /
+      rm -rf "$$TARGET" || true
